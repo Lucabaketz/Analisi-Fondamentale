@@ -359,6 +359,7 @@ for tkr in tickers:
 
     # Disclaimer
     st.warning(
-        "**Disclaimer:** questa analisi è fornita a scopo informativo e non costituisce consulenza finanziaria "
+        "*Disclaimer:* questa analisi è fornita a scopo informativo e non costituisce consulenza finanziaria "
         "né raccomandazione di investimento."
     )
+
