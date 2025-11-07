@@ -1,4 +1,3 @@
-import math
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -12,74 +11,51 @@ st.markdown(
     """
     <style>
     :root{
-      --primary: #1e3a8a;      /* blu scuro */
-      --primary-600:#1d4ed8;   /* blu */
-      --bg:#f8fafc;            /* grigio chiarissimo */
-      --bg-soft:#eef2ff;       /* azzurrino tenue */
-      --text:#0f172a;
-      --muted:#64748b;
-      --ring:#93c5fd;
+      --primary:#1e3a8a; --primary-600:#1d4ed8; --bg:#f8fafc; --bg-soft:#eef2ff; --text:#0f172a; --muted:#64748b;
     }
-    .stApp {background: var(--bg);}
-    h1,h2,h3,h4 { color: var(--primary); }
-    .blue-card{
-      background: white; border:1px solid #e5e7eb; border-radius:14px; padding:16px;
-      box-shadow:0 1px 2px rgba(2,6,23,.06);
-    }
-    .soft { background: var(--bg-soft) !important; }
-    .muted { color: var(--muted); font-size:0.95rem; }
-    .metric > div { border-radius:12px; }
-    .stButton>button, .stDownloadButton>button {
-      background: var(--primary-600) !important; color:white !important; border-radius:10px;
-      border:0 !important; padding:.5rem .9rem; box-shadow:none;
-    }
-    .stSelectbox [data-baseweb="select"] { border-radius:10px; }
-    .stTabs [data-baseweb="tab-list"] { gap:.5rem; }
-    .stTabs [data-baseweb="tab"] { background:#e2e8f0; border-radius:999px; padding:.35rem .9rem; color:#0f172a; }
-    .stTabs [aria-selected="true"] { background:var(--primary-600); color:white; }
+    .stApp{background:var(--bg);} h1,h2,h3,h4{color:var(--primary);} 
+    .blue-card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;box-shadow:0 1px 2px rgba(2,6,23,.06)}
+    .soft{background:var(--bg-soft)!important}
+    .badge{background:#e2e8f0;color:#0f172a;padding:.25rem .6rem;border-radius:999px;font-size:.85rem;margin-right:.35rem}
+    .note{font-size:.9rem;color:#475569}
+    .tag{display:inline-block;background:#eef2ff;color:#1e3a8a;border:1px solid #c7d2fe;padding:.15rem .5rem;border-radius:8px;margin-right:.35rem}
+    ul.tight li{margin:.25rem 0;}
+    code.kbd{background:#f1f5f9;border:1px solid #e2e8f0;padding:.05rem .35rem;border-radius:6px}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # =========================
-# LISTE TICKER (menu)
+# LISTA UNICA TICKER (menu)
 # =========================
-FTSE_MIB = {
-    "ENEL": "ENEL.MI",
-    "ENI": "ENI.MI",
-    "Intesa Sanpaolo": "ISP.MI",
-    "UniCredit": "UCG.MI",
-    "Stellantis": "STLAM.MI",
-    "Ferrari": "RACE.MI",
-    "Prysmian": "PRY.MI",
-    "Poste Italiane": "PST.MI",
-    "Moncler": "MONC.MI",
-    "Amplifon": "AMP.MI",
+STOCKS = {
+    "Apple":"AAPL","Microsoft":"MSFT","NVIDIA":"NVDA","Amazon":"AMZN","Alphabet":"GOOGL","Meta":"META",
+    "Tesla":"TSLA","Berkshire Hathaway B":"BRK-B","JPMorgan":"JPM","Visa":"V","ExxonMobil":"XOM",
+    "Broadcom":"AVGO","Johnson & Johnson":"JNJ","UnitedHealth":"UNH","Coca-Cola":"KO","PepsiCo":"PEP",
+    "Procter & Gamble":"PG","Walmart":"WMT",
+    # Italia
+    "ENEL":"ENEL.MI","ENI":"ENI.MI","Intesa Sanpaolo":"ISP.MI","UniCredit":"UCG.MI","Stellantis":"STLAM.MI",
+    "Ferrari":"RACE.MI","Prysmian":"PRY.MI","Poste Italiane":"PST.MI","Moncler":"MONC.MI","Amplifon":"AMP.MI",
+    # Europa/altre
+    "ASML":"ASML","TSMC":"TSM","Novo Nordisk":"NOVO-B.CO","LVMH":"MC.PA","Nestlé":"NESN.SW","SAP":"SAP",
+    "Shell":"SHEL","Toyota":"TM",
 }
-USA_MEGA = {
-    "Apple": "AAPL",
-    "Microsoft": "MSFT",
-    "Amazon": "AMZN",
-    "Alphabet": "GOOGL",
-    "Meta": "META",
-    "NVIDIA": "NVDA",
-    "Tesla": "TSLA",
-    "JPMorgan": "JPM",
-    "Visa": "V",
-    "ExxonMobil": "XOM",
-}
-UNIVERSES = {"FTSE MIB": FTSE_MIB, "USA Mega-cap": USA_MEGA}
 
 # =========================
 # HELPERS
 # =========================
 def _as_float(x, default=None):
-    try: return float(x)
-    except Exception: return default
+    try:
+        v = float(x)
+        if np.isnan(v):
+            return default
+        return v
+    except Exception:
+        return default
 
-def fmt2(v):  # per stampare "N/D" con 2 decimali quando serve
-    return f"{v:.2f}" if v is not None else "N/D"
+def fmt2(v):
+    return f"{v:.2f}" if (v is not None) else "N/D"
 
 @st.cache_data(ttl=300)
 def fetch_yf_info(symbol: str):
@@ -88,6 +64,7 @@ def fetch_yf_info(symbol: str):
         info = t.get_info() if hasattr(t, "get_info") else (t.info or {})
     except Exception:
         info = {}
+    # prezzo fallback
     price = info.get("currentPrice")
     if not price:
         try:
@@ -96,266 +73,328 @@ def fetch_yf_info(symbol: str):
                 price = float(h["Close"].iloc[-1])
         except Exception:
             price = None
-
-    eps = info.get("trailingEps") or info.get("epsTrailingTwelveMonths")
-    pe = info.get("trailingPE")
-    if (not pe or pe == 0) and price and eps:
-        try:
-            if eps and eps != 0: pe = float(price)/float(eps)
-        except Exception: pass
-
-    dy = info.get("dividendYield")
-    if dy is not None:
-        try: dy = dy*100 if dy < 1 else dy
-        except Exception: dy = None
-    dps = info.get("dividendRate")  # dividendo annuo/azione
-
     return {
         "price": _as_float(price),
         "currency": info.get("currency", ""),
+        "financialCurrency": info.get("financialCurrency", info.get("currency", "")),
         "name": info.get("shortName") or info.get("longName") or symbol,
         "sector": info.get("sector"),
-        "beta": _as_float(info.get("beta")),
-        "eps": _as_float(eps),
-        "pe": _as_float(pe),
-        "payout": _as_float(info.get("payoutRatio")),  # frazione (0.35 = 35%)
-        "div_yield": _as_float(dy),
-        "dividend_rate": _as_float(dps),
         "shares_out": info.get("sharesOutstanding"),
+        # utili
+        "eps_trailing": _as_float(info.get("trailingEps") or info.get("epsTrailingTwelveMonths")),
+        "eps_forward": _as_float(info.get("forwardEps")),
+        "pe_trailing": _as_float(info.get("trailingPE")),
+        "pe_forward": _as_float(info.get("forwardPE")),
+        # patrimonio / ricavi / ebitda
+        "book_value_ps": _as_float(info.get("bookValue")),
+        "price_to_book": _as_float(info.get("priceToBook")),
+        "revenue": _as_float(info.get("totalRevenue")),
+        "ebitda": _as_float(info.get("ebitda")),
+        # FCF
+        "free_cashflow": info.get("freeCashflow"),
+        "levered_free_cashflow": info.get("leveredFreeCashflow"),
+        # dividendi
+        "forward_dividend_rate": _as_float(info.get("forwardAnnualDividendRate") or info.get("dividendRate")),
+        "trailing_dividend_rate": _as_float(info.get("trailingAnnualDividendRate")),
+        "payout": _as_float(info.get("payoutRatio")),
+        # P/S corrente
+        "price_to_sales_ttm": _as_float(info.get("priceToSalesTrailing12Months")),
     }
 
-@st.cache_data(ttl=600)
-def fetch_eps_history(symbol: str):
-    t = yf.Ticker(symbol)
+@st.cache_data(ttl=900)
+def get_dps_ttm(symbol: str):
     try:
-        earn = t.earnings  # DF con Earnings/Revenue per anno
-        if isinstance(earn, pd.DataFrame) and not earn.empty:
-            info = fetch_yf_info(symbol)
-            shares = info.get("shares_out") or 0
-            if shares:
-                return (earn["Earnings"]/shares).dropna()
+        s = yf.Ticker(symbol).dividends
+        if s is not None and not s.empty:
+            cut = pd.Timestamp.today(tz=s.index.tz) - pd.DateOffset(years=1)
+            last12 = s[s.index >= cut]
+            dps = float(last12.sum()) if not last12.empty else None
+            return dps if dps and dps > 0 else None
     except Exception:
         pass
-    return pd.Series(dtype=float)
+    return None
 
-def cagr(series: pd.Series, years: int = 5):
-    if series is None or series.empty or len(series)<2: return None
-    s = series.sort_index()
-    first = float(s.iloc[max(0, len(s)-years-1)])
-    last  = float(s.iloc[-1])
-    n = min(years, len(s)-1)
-    if first<=0 or last<=0 or n<=0: return None
-    try: return (last/first)**(1/n) - 1
-    except Exception: return None
-
-SECTOR_PE = {
-    "Technology": 22.0, "Communication Services": 19.0, "Consumer Discretionary": 18.0,
-    "Health Care": 18.0, "Industrials": 16.0, "Materials": 15.0, "Consumer Staples": 18.0,
-    "Energy": 10.0, "Financial Services": 11.0, "Utilities": 14.0, "Real Estate": 14.0,
-}
-
-def required_return(beta, rf, mrp, default_beta=1.0):
-    b = beta if beta is not None and not math.isnan(beta) else default_beta
-    return rf + b*mrp
-
-def dcf_lite_fair_value(eps, payout, r, g1, g2):
-    if eps is None: return None
-    if payout is None or payout<0 or payout>1: payout = 0.4
-    fcf0 = eps*(1-payout)
-    years=5; pv=0.0
-    for t in range(1, years+1):
-        fcf_t = fcf0*((1+g1)**t); pv += fcf_t/((1+r)**t)
-    fcf_T = fcf0*((1+g1)**years)
-    if r<=g2: g2 = max(g2-0.01,0.0)
-    terminal = fcf_T*(1+g2)/(r-g2); pv_term = terminal/((1+r)**years)
-    return pv+pv_term
-
-def relative_pe_fair_value(eps, sector):
-    if eps is None: return None
-    return eps*SECTOR_PE.get(sector, 15.0)
+def select_dividend(price, forward_div, trailing_div, dps_ttm, payout, eps_for_div):
+    def _ok(d):
+        return (d is not None) and (d>0) and (price and price>0) and (0 < d/price <= 0.15)
+    if _ok(forward_div):
+        return forward_div, "FORWARD"
+    if _ok(dps_ttm):
+        return dps_ttm, "TTM"
+    if _ok(trailing_div):
+        return trailing_div, "TRAILING"
+    if (payout is not None) and (0 <= payout <= 1) and (eps_for_div is not None) and (eps_for_div > 0):
+        dps_est = eps_for_div * payout
+        if _ok(dps_est):
+            return dps_est, "PAYOUT"
+    return None, None
 
 def gordon_fair_value(dps, r, g):
-    if dps is None or dps<=0: return None
-    if r<=g: g = max(g-0.01, 0.0)
+    if dps is None or dps <= 0: return None
+    g = float(min(0.08, max(0.0, g)))
+    r = float(min(0.14, max(0.06, r)))
+    if r <= g: g = max(g-0.01, 0.0)
     return dps*(1+g)/(r-g)
 
-def combine_values(values, has_ddm):
-    w = {"DCF":0.6, "PE":0.4, "DDM":0.0} if not has_ddm else {"DCF":0.6,"PE":0.3,"DDM":0.1}
-    tot=0.0; ww=0.0
-    for k,v in values.items():
-        if v is not None and w.get(k,0)>0: tot+=v*w[k]; ww+=w[k]
-    return (tot/ww) if ww>0 else None
+def ddm_gate(dps, price):
+    try:
+        if dps is None or price is None or price<=0: return False
+        return (dps/price) >= 0.005
+    except Exception:
+        return False
 
-def show_or_input(label, key, default, step=0.01, fmt="{:.2f}",
-                  allow_edit=False, allow_negative=False, currency=""):
-    val = default if isinstance(default,(int,float)) else _as_float(default, None)
-    if allow_edit:
-        minv = None if allow_negative else 0.0
-        return st.number_input(label, min_value=minv, value=float(val or 0.0), step=step, key=key)
-    else:
-        if val is None: st.markdown(f"- **{label}:** N/D")
-        else:           st.markdown(f"- **{label}:** {fmt.format(val)} {currency}")
-        return val
+# ------------- APP -------------
+st.title("VALUTATORE AZIONI")
 
-# =========================
-# UI: TABS (Analisi / Tutorial)
-# =========================
 tab_analisi, tab_tutorial = st.tabs(["📊 Analisi", "📘 Tutorial"])
 
 with tab_analisi:
     st.markdown("### Selezione titoli")
-    sel1, sel2 = st.columns([1,2])
-    with sel1:
-        choice = st.selectbox("Scegli l'universo", ["FTSE MIB","USA Mega-cap","Altro"])
-    with sel2:
-        if choice=="Altro":
-            tickers_input = st.text_input("Ticker personalizzati (max 2, separati da virgola)", "")
-            tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
-        else:
-            mapping = UNIVERSES[choice]; labels = list(mapping.keys())
-            selected_labels = st.multiselect(f"Seleziona fino a 2 titoli ({choice})", labels, max_selections=2)
-            tickers = [mapping[l] for l in selected_labels]
-    tickers = tickers[:2]
-    allow_manual = st.toggle("Modifica manualmente i dati quantitativi", value=False)
+    labels_ordered = list(STOCKS.keys())
+    selected_labels = st.multiselect("Seleziona fino a 2 titoli (menu unico)", labels_ordered, max_selections=2)
+    custom = st.text_input("Oppure inserisci fino a 2 ticker separati da virgola (es. AAPL, ENEL.MI)", "")
 
-    # Parametri modello
-    with st.expander("⚙️ Assunzioni del modello (opzionali)"):
-        c1,c2,c3,c4 = st.columns(4)
-        with c1: rf  = st.number_input("Tasso risk-free r_f (%)", value=3.0, step=0.1)/100.0
-        with c2: mrp = st.number_input("Market Risk Premium MRP (%)", value=5.5, step=0.1)/100.0
-        with c3: cap_g1 = st.number_input("Cap crescita 5y g₁ max (%)", value=15.0, step=0.5)/100.0
-        with c4: g2  = st.number_input("Crescita terminale g₂ (%)", value=2.0, step=0.1)/100.0
+    tickers_from_menu = [STOCKS[l] for l in selected_labels]
+    tickers_from_custom = [t.strip().upper() for t in custom.split(",") if t.strip()]
+    tickers = (tickers_from_custom or tickers_from_menu)[:2]
+
+    show_debug  = st.toggle("Mostra pannello debug", value=True)
+
+    with st.expander("⚙️ Assunzioni DDM"):
+        c1,c2 = st.columns(2)
+        with c1: r_req = st.number_input("Tasso di sconto r (%)", value=9.0, step=0.5)/100.0
+        with c2: g_term = st.number_input("Crescita g (%)", value=2.0, step=0.25)/100.0
 
     for tkr in tickers:
         st.markdown(f"## {tkr}")
         col1, col2 = st.columns(2, gap="large")
 
+        info = fetch_yf_info(tkr)
+        price = info.get("price"); price_ccy = info.get("currency") or ""; fin_ccy = info.get("financialCurrency") or price_ccy or ""
+        shares = info.get("shares_out") or 0
+
         with col1:
-            st.markdown('<div class="blue-card soft">**Valutazione Qualitativa**</div>', unsafe_allow_html=True)
+            st.markdown('<div class="blue-card soft">**Valutazione Qualitativa (rapida)**</div>', unsafe_allow_html=True)
             q1 = st.radio("Vantaggio competitivo duraturo?", ["Sì","No"], index=1, key=f"{tkr}_q1")
             q2 = st.radio("Situazione finanziaria solida?", ["Sì","No"], index=1, key=f"{tkr}_q2")
             q3 = st.radio("Utili in crescita?", ["Sì","No"], index=1, key=f"{tkr}_q3")
             q4 = st.radio("Management competente?", ["Sì","No"], index=1, key=f"{tkr}_q4")
 
         with col2:
-            st.markdown('<div class="blue-card">**Dati Quantitativi (Yahoo Finance)**</div>', unsafe_allow_html=True)
-            info = fetch_yf_info(tkr)
-            currency = info.get("currency") or ""
+            st.markdown('<div class="blue-card">**Dati Quantitativi (Yahoo)**</div>', unsafe_allow_html=True)
+            st.markdown(f"- **Prezzo attuale ({tkr})**: {fmt2(price)} {price_ccy}")
+            eps_t = info.get("eps_trailing"); eps_f = info.get("eps_forward")
+            st.markdown(f"- **EPS trailing [{fin_ccy}]**: {fmt2(eps_t)}  |  **EPS forward**: {fmt2(eps_f)}")
 
-            price_val = show_or_input(f"Prezzo attuale ({tkr})", f"{tkr}_price", info.get("price"),
-                                      step=0.01, allow_edit=allow_manual, currency=currency)
-            pe_val = show_or_input(f"P/E ({tkr})", f"{tkr}_pe", info.get("pe"),
-                                   step=0.1, allow_edit=allow_manual, allow_negative=True)
-            eps_val = show_or_input(f"EPS ({tkr})", f"{tkr}_eps", info.get("eps"),
-                                    step=0.01, allow_edit=allow_manual, allow_negative=True)
-            payout_val = show_or_input(f"Payout ratio (0–1) ({tkr})", f"{tkr}_payout", info.get("payout"),
-                                       step=0.05, fmt="{:.2f}", allow_edit=allow_manual)
-            dy = info.get("div_yield")
-            if allow_manual:
-                dy = st.number_input(f"Dividend Yield (%) ({tkr})", min_value=0.0,
-                                     value=float(dy or 0.0), step=0.1, key=f"{tkr}_divy")
-            else:
-                st.markdown(f"- **Dividend Yield:** {dy:.1f}%" if dy is not None else "- **Dividend Yield:** N/D")
+            # per-share metrics
+            bvps = info.get("book_value_ps")
+            ebitda_ps = (info.get("ebitda")/shares) if (info.get("ebitda") and shares) else None
+            sales_ps  = (info.get("revenue")/shares) if (info.get("revenue") and shares) else None
+            fcf_ps = None
+            if info.get("free_cashflow") and shares:
+                try: fcf_ps = float(info.get("free_cashflow"))/float(shares)
+                except Exception: pass
+            if (fcf_ps is None) and info.get("levered_free_cashflow") and shares:
+                try: fcf_ps = float(info.get("levered_free_cashflow"))/float(shares)
+                except Exception: pass
 
-            # grafico 1Y
+            st.markdown(f"- **BV/az**: {fmt2(bvps)} | **EBITDA/az**: {fmt2(ebitda_ps)} | **Sales/az**: {fmt2(sales_ps)} | **FCF/az**: {fmt2(fcf_ps)}")
+
             try:
                 h = yf.Ticker(tkr).history(period="1y")
-                if not h.empty:
+                if isinstance(h, pd.DataFrame) and not h.empty:
                     st.line_chart(h["Close"], height=180)
             except Exception:
                 pass
 
-        # crescita & r
-        eps_hist = fetch_eps_history(tkr)
-        g1_raw = cagr(eps_hist, years=5) or cagr(eps_hist, years=3) or 0.05
-        g1 = min(max(g1_raw, -0.10), cap_g1)
-        r_req = required_return(info.get("beta"), rf, mrp)
+        # ------------------ MULTIPLI ------------------
+        st.markdown("### 🔹 Campi per Fair Value dai multipli")
+        curr_pe_t = (price/eps_t) if (price and eps_t and eps_t>0) else None
+        curr_pe_f = (price/eps_f) if (price and eps_f and eps_f>0) else None
+        curr_pe = ( (curr_pe_t + curr_pe_f)/2 if (curr_pe_t and curr_pe_f) else (curr_pe_f or curr_pe_t) )
+        curr_pb = (price/bvps) if (price and bvps) else info.get("price_to_book")
+        curr_ps = (price/sales_ps) if (price and sales_ps) else info.get("price_to_sales_ttm")
+        curr_pebitda = ((price*shares)/(info.get("ebitda") or np.nan)) if (price and shares and info.get("ebitda")) else None
+        curr_pfcf = (price/fcf_ps) if (price and fcf_ps) else None
+
+        cpe1,cpe2,cpe3,cpe4,cpe5 = st.columns(5)
+        with cpe1: pe_star = st.number_input(f"P/E atteso ({tkr})", value=float(curr_pe or 15.0), step=0.5)
+        with cpe2: pb_star = st.number_input(f"P/BV atteso ({tkr})", value=float(curr_pb or 1.5), step=0.1)
+        with cpe3: pebitda_star = st.number_input(f"P/EBITDA atteso ({tkr})", value=float(curr_pebitda or 10.0), step=0.5)
+        with cpe4: ps_star = st.number_input(f"P/Sales atteso ({tkr})", value=float(curr_ps or 2.0), step=0.1)
+        with cpe5: pfcf_star = st.number_input(f"P/FCF atteso ({tkr})", value=float(curr_pfcf or 15.0), step=0.5)
+
+        # Avvisi per i 3 multipli dove spesso mancano dati
+        if ebitda_ps is None:
+            st.warning("P/EBITDA: dato EBITDA per azione non disponibile. Inserisci manualmente l'EBITDA per azione per abilitare il calcolo.")
+            ebitda_ps = st.number_input(f"EBITDA per azione ({tkr}) – inserisci", min_value=0.0, value=0.0, step=0.01, key=f"{tkr}_ebitda_ps_manual") or None
+        if sales_ps is None:
+            st.warning("P/Sales: dato Sales per azione non disponibile. Inserisci manualmente le Vendite per azione per abilitare il calcolo.")
+            sales_ps = st.number_input(f"Sales per azione ({tkr}) – inserisci", min_value=0.0, value=0.0, step=0.01, key=f"{tkr}_sales_ps_manual") or None
+        if fcf_ps is None:
+            st.warning("P/FCF: dato FCF per azione non disponibile. Inserisci manualmente il FCF per azione per abilitare il calcolo.")
+            fcf_ps = st.number_input(f"FCF per azione ({tkr}) – inserisci", min_value=0.0, value=0.0, step=0.01, key=f"{tkr}_fcf_ps_manual") or None
 
         # fair values
-        fv_dcf = dcf_lite_fair_value(eps_val, payout_val, r_req, g1, g2)
-        fv_pe  = relative_pe_fair_value(eps_val, info.get("sector"))
-        fv_ddm = gordon_fair_value(info.get("dividend_rate"), r_req, min(g1, 0.08))
+        fv_pe = (eps_f or eps_t) * pe_star if ((eps_f or eps_t) and pe_star>0) else None
+        fv_pb = bvps * pb_star if (bvps and pb_star>0) else None
+        fv_pebitda = (ebitda_ps * pebitda_star) if (ebitda_ps and pebitda_star>0) else None
+        fv_ps = (sales_ps * ps_star) if (sales_ps and ps_star>0) else None
+        fv_pfcf = (fcf_ps * pfcf_star) if (fcf_ps and pfcf_star>0) else None
 
-        st.markdown("**Fair Value – {}**".format(tkr))
-        vals = {"DCF": fv_dcf, "PE": fv_pe, "DDM": fv_ddm}
-        fv_comb = combine_values(vals, fv_ddm is not None)
+        # ------------------ DDM ------------------
+        st.markdown("### 💸 Fair Value RISULTATI")
+        dps_ttm = get_dps_ttm(tkr)
+        forward_div = info.get("forward_dividend_rate")
+        trailing_div = info.get("trailing_dividend_rate")
+        eps_for_div = (eps_f or eps_t)
+        dps_eff, dps_src = select_dividend(price, forward_div, trailing_div, dps_ttm, info.get("payout"), eps_for_div)
+        fv_ddm = gordon_fair_value(dps_eff, r_req, g_term)
+        if not ddm_gate(dps_eff, price):
+            fv_ddm = None
 
-        band = [v for v in vals.values() if v is not None]
-        if band:
-            st.write(
-                f"Banda modelli: **{min(band):.2f} – {max(band):.2f} {currency}**  "
-                f"(DCF: {fmt2(fv_dcf)}, PE: {fmt2(fv_pe)}, DDM: {fmt2(fv_ddm)})"
-            )
-
-        if fv_comb is not None:
-            if price_val and price_val>0:
-                delta = (fv_comb - price_val)/price_val*100
-                st.metric("Fair Value combinato", f"{fv_comb:.2f} {currency}", f"{delta:.1f}%")
+        def line_fv(label, fv):
+            if fv is None:
+                st.write(f"- **{label}:** N/D")
             else:
-                st.metric("Fair Value combinato", f"{fv_comb:.2f} {currency}")
-        else:
-            st.info("Impossibile calcolare un fair value combinato con i dati disponibili.")
+                delta = f" (Δ {((fv-price)/price*100):.1f}%)" if (price and price>0) else ""
+                st.write(f"- **{label}:** {fv:.2f} {price_ccy}{delta}")
 
-        with st.expander("Dettaglio assunzioni e diagnosi"):
-            sector = info.get("sector") or "N/D"
-            beta   = info.get("beta")
-            st.write(
-              f"- **Settore**: {sector} | **β**: {beta if beta is not None else 'N/D'} "
-              f"| **r** = {r_req*100:.1f}% | **g₁** = {g1*100:.1f}% | **g₂** = {g2*100:.1f}%"
-            )
+        st.markdown("#### 📌 Risultati per modello")
+        line_fv("P/E", fv_pe)
+        st.caption("↳ Basato sugli utili (EPS); utile per aziende con utili stabili/crescenti.")
+        line_fv("P/BV", fv_pb)
+        st.caption("↳ Rilevante per banche/assicurazioni. - Per calcolo inserire dati manualmente ")
+        line_fv("P/EBITDA", fv_pebitda)
+        st.caption("↳ Utile per business capital-intensive.  - Per calcolo inserire dati manualmente ")
+        line_fv("P/Sales", fv_ps)
+        st.caption("↳ Adatto a società growth/early-stage.  - Per calcolo inserire dati manualmente ")
+        line_fv("P/FCF", fv_pfcf)
+        st.caption("↳ Valorizza la capacità di generare cassa.  - Per calcolo inserire dati manualmente ")
+        line_fv("DDM (Gordon)", fv_ddm)
+        st.caption("↳ Basato sul dividendo (priorità al forward); escluso se yield troppo basso (<0,5%).")
 
+        # ------------------ DEBUG ------------------
+        if show_debug:
+            with st.expander("🛠️ Debug & diagnostica"):
+                st.write(f"- **Valuta prezzo**: {price_ccy} | **Valuta contabile**: {fin_ccy}")
+                st.write(f"- **EPS T**: {fmt2(eps_t)} | **EPS F**: {fmt2(eps_f)} | **BV/az**: {fmt2(bvps)} | **EBITDA/az**: {fmt2(ebitda_ps)} | **Sales/az**: {fmt2(sales_ps)} | **FCF/az**: {fmt2(fcf_ps)}")
+
+        # ======================
+        # COMMENTo FINALE (semplificato come richiesto)
+        # ======================
         st.subheader(f"Commento finale su {tkr}")
+
+        def classify_diff(upside):
+            if upside is None:
+                return None, "N/D"
+            if upside <= -0.30:
+                return "Molto caro", "⚠️ Sopravvalutazione elevata (>+30% vs prezzo)"
+            if -0.30 < upside <= -0.15:
+                return "Caro", "⚠️ Sopravvalutazione moderata (+15–30%)"
+            if -0.15 < upside <= 0.10:
+                return "In linea", "≈ Valutazione in linea (−15% a +10%)"
+            if 0.10 < upside <= 0.30:
+                return "Sottovalutata", "✅ Sottovalutazione potenziale (+10–30%)"
+            return "Molto sottovalutata", "✅✅ Sottovalutazione elevata (>+30%)"
+
+        def fmt_pct(v):
+            return f"{v*100:.1f}%" if v is not None else "N/D"
+
+        up_pe  = (fv_pe/price - 1.0) if (fv_pe and price) else None
+        up_ddm = (fv_ddm/price - 1.0) if (fv_ddm and price) else None
+
+        label_pe, note_pe   = classify_diff(up_pe)
+        label_ddm, note_ddm = classify_diff(up_ddm) if fv_ddm is not None else (None, None)
+
         score = sum(1 for q in [q1,q2,q3,q4] if q=="Sì")
         qual_map = {0:"Debole",1:"Debole",2:"Misto",3:"Buono",4:"Ottimo"}
-        comment = f"Profilo qualitativo: **{qual_map[score]}**. "
-        if fv_comb and price_val:
-            d = (fv_comb - price_val)/price_val*100
-            if d>=10: comment += f"Valutazione: **sottovalutato** (~{d:.0f}%). "
-            elif d<=-10: comment += f"Valutazione: **sopravvalutato** (~{abs(d):.0f}%). "
-            else: comment += "Valutazione: **in linea**. "
-        comment += "Modelli: DCF-Lite (FCF/ps), multipli di settore, Gordon (se dividend payer)."
-        st.write(comment)
-        st.warning("⚠️ Analisi informativa; non costituisce consulenza finanziaria.", icon="⚠️")
+        qual_label = qual_map[score]
+
+        payout = info.get("payout")
+        div_flag = None
+        if payout is not None:
+            if payout > 1.0:
+                div_flag = "Payout >100%: sostenibilità del dividendo a rischio."
+            elif payout < 0.2 and fv_ddm is not None:
+                div_flag = "Payout contenuto: spazio per crescita dividendi, se utili in aumento."
+
+        ddm_reason = "DDM non applicato (yield <0,5% o dati dividendo non utilizzabili)." if fv_ddm is None else f"DDM applicato (fonte dividendo: {dps_src})."
+
+        st.markdown(
+            f"""
+            <div class="blue-card">
+              <div>
+                <span class="tag">Profilo qualitativo: {qual_label}</span>
+                <span class="tag">Payout: {fmt2(payout) if payout is not None else 'N/D'}</span>
+              </div>
+              <p class="note" style="margin-top:.5rem">Commento basato <b>solo</b> su differenziali vs <b>P/E</b> e <b>DDM</b> (se applicabile).</p>
+              <ul class="tight">
+                <li><b>Vista P/E</b>: upside {fmt_pct(up_pe)} → <b>{label_pe or 'N/D'}</b>. {note_pe or ''}</li>
+                <li><b>Vista DDM</b>: {('upside '+fmt_pct(up_ddm)+' → <b>'+label_ddm+'</b>. '+(note_ddm or '')) if fv_ddm is not None else ddm_reason}</li>
+                {('<li>'+div_flag+'</li>' if div_flag else '')}
+              </ul>
+              <p class="note">Nota: stime e dati automatici possono contenere errori; verifica sempre le fonti.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.warning("⚠️ Analisi informativa; non costituisce consulenza finanziaria. ATTENZIONE: i dati inseriti in automatico potrebbero essere errati", icon="⚠️")
 
 with tab_tutorial:
-    st.markdown("## Come calcoliamo il fair value (tutorial)")
+    st.markdown("## 📘 Tutorial – Istruzioni pratiche per usare l’app")
     st.markdown(
         """
-        Questo strumento combina **tre** metodi per stimare un valore ragionevole per azione:
+        <div class="blue-card">
+          <h4>1) Scegli i titoli</h4>
+          <ul class="tight">
+            <li>Dal menu seleziona fino a <b>2 titoli</b> oppure inserisci i ticker manualmente (es. <code class="kbd">AAPL</code>, <code class="kbd">ENEL.MI</code>).</li>
+            <li>Attiva <b>Debug</b> per vedere rapidamente EPS, BV/az, EBITDA/az, Sales/az, FCF/az.</li>
+          </ul>
 
-        **1) DCF-Lite (flusso di cassa scontato semplificato)**  
-        - Stimiamo il **FCF per azione** come `EPS × (1 − payout)`.  
-        - Proiettiamo 5 anni con una crescita **g₁** basata sulla **CAGR dell’EPS** (con un tetto massimo).  
-        - Applichiamo una **crescita terminale g₂** (di default 2%).  
-        - Scontiamo i flussi con il tasso **r = r_f + β × MRP (CAPM)**.  
-        - Somma dei flussi scontati + **valore terminale** ⇒ fair value DCF.
+          <h4>2) Imposta (se vuoi) il DDM</h4>
+          <ul class="tight">
+            <li>Nel pannello “Assunzioni DDM” imposta <b>r</b> (tasso di sconto) e <b>g</b> (crescita di lungo periodo).</li>
+            <li>Il DDM viene usato solo se il <b>dividend yield</b> è abbastanza significativo (≥0,5%) e i dati sono coerenti.</li>
+          </ul>
 
-        **2) Multipli relativi (P/E di settore)**  
-        - Selezioniamo un **P/E tipico** per il settore (es.: Utilities 14, Tech 22…).  
-        - `FV_PE = EPS × P/E_settore`.
+          <h4>3) Imposta i multipli attesi</h4>
+          <ul class="tight">
+            <li>Per il commento finale conta <b>solo</b> il fair value da <b>P/E</b> e da <b>DDM</b> (se applicabile).</li>
+            <li>Puoi comunque impostare anche P/BV, P/EBITDA, P/Sales, P/FCF (visibili nei risultati ma non usati nel commento finale).</li>
+          </ul>
 
-        **3) Modello di Gordon (dividendi)**  
-        - Se c’è dividendo, usiamo `FV_DDM = DPS × (1+g) / (r−g)` con `g = min(g₁, 8%)`.  
+          <h4>4) Dati mancanti? Come recuperarli</h4>
+          <p class="note">Alcuni valori “per azione” possono mancare: inseriscili tu. Ecco dove trovarli e come calcolarli:</p>
+          <ul class="tight">
+            <li><b>Fonti rapide (gratuite)</b>: Yahoo Finance, Investing.com, Morningstar (versione free), siti IR aziendali, Borsa Italiana/LSE, EDGAR (SEC 10-K/20-F per società USA).</li>
+            <li><b>Sales per azione</b> = Ricavi totali (TTM o ultimo anno) ÷ <i>numero azioni</i> (meglio le <i>diluted average</i> dall’Annual Report).</li>
+            <li><b>EBITDA per azione</b> = EBITDA totale ÷ numero azioni.</li>
+            <li><b>FCF per azione</b> = Free Cash Flow (operativo – capex) ÷ numero azioni. Se non trovi il FCF pronto, calcolalo dai prospetti di cassa.</li>
+            <li><b>EPS</b>: l’app usa automaticamente <i>forward</i> se disponibile, altrimenti <i>trailing</i>. Puoi validarlo con il consenso analisti su Yahoo/IR.</li>
+            <li><b>Dividendo (DPS)</b>: usa <i>forward</i> dal prospetto dividendi; in alternativa somma gli ultimi 4 pagamenti (TTM) o prendi il <i>trailing</i>. Se mancano, stima con <code>DPS ≈ EPS × Payout</code> (solo se payout è plausibile).</li>
+          </ul>
 
-        **Combinazione**  
-        - Se DDM non è applicabile: **DCF 60% + PE 40%**.  
-        - Se DDM è applicabile: **DCF 60% + PE 30% + DDM 10%**.  
+          <h4>5) Come leggere i risultati</h4>
+          <ul class="tight">
+            <li>Per ciascun modello vedi il <b>fair value</b> e la <b>Δ%</b> vs prezzo.</li>
+            <li>Il <b>Commento finale</b> mostra due viste:
+              <ul class="tight">
+                <li><b>P/E</b>: usa EPS (forward o trailing) × P/E atteso.</li>
+                <li><b>DDM</b>: se applicabile, usa DPS con formula di Gordon.</li>
+              </ul>
+            </li>
+            <li>La classificazione è: <i>Molto sottovalutata</i> (&gt;+30%), <i>Sottovalutata</i> (+10÷30%), <i>In linea</i> (−15÷+10%), <i>Cara</i> (+15÷+30% in senso negativo), <i>Molto cara</i> (&gt;+30% in senso negativo).</li>
+          </ul>
 
-        **Interpretazione**  
-        - Mostriamo una **banda** (min–max dei modelli calcolati) e un **Fair Value combinato**.  
-        - Il **Δ%** indica la differenza rispetto al prezzo corrente (sottovalutato / in linea / sopravvalutato).
-
-        **Parametri modificabili (opzionali)**  
-        - `r_f` (risk-free), `MRP` (premio di mercato), `g₁ cap`, `g₂`.  
-        - Se lasci tutto com’è, usiamo valori **prudenziali**.
-
-        **Limiti da tenere a mente**  
-        - Dati Yahoo possono essere incompleti su alcuni titoli.  
-        - Le ipotesi (crescita, payout, P/E di settore) sono **semplificate**.  
-        - Il risultato è **informativo**: non è una raccomandazione d’investimento.
+          <h4>6) Consigli operativi (generali)</h4>
+          <ul class="tight">
+            <li>Verifica sempre le <b>ipotesi</b> (P/E atteso, r e g del DDM) e i <b>dati</b> inseriti manualmente.</li>
+            <li>Per aziende <i>growth</i> con dividendi bassi, il DDM spesso non è informativo; per business maturi può esserlo.</li>
+            <li>Ricorda: questa è un’analisi informativa, non costituisce consulenza finanziaria.</li>
+          </ul>
+        </div>
         """,
         unsafe_allow_html=True,
     )
-
-
-
