@@ -144,26 +144,24 @@ def ddm_gate(dps, price):
         return False
 
 # ------------- APP -------------
+import base64
 from pathlib import Path
 
-logo_path = Path(__file__).parent / "logo.png"
+def img_to_base64(p):
+    return base64.b64encode(Path(p).read_bytes()).decode()
 
-c1, c2 = st.columns([1, 12])
-with c1:
-    st.image(str(logo_path), width=48)
-with c2:
-    st.markdown(
-        """
-        <h1 style="
-            font-family:'Georgia','Garamond',serif;
-            font-style:italic;
-            color:#1e3a8a;
-            margin:0; line-height:1.1;
-            text-align:center;
-        ">Valutatore Azioni – Finanza</h1>
-        """,
-        unsafe_allow_html=True
-    )
+b64 = img_to_base64("logo.png")
+st.markdown(
+    f"""
+    <div style="display:flex;justify-content:center;align-items:center;gap:12px;margin:12px 0 24px;">
+      <img src="data:image/png;base64,{b64}" width="48">
+      <span style="font-family:'Georgia','Garamond',serif;font-style:italic;color:#1e3a8a;font-size:2.1em;">
+        Valutatore Azioni – Finanza
+      </span>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 tab_analisi, tab_tutorial = st.tabs(["📊 Analisi", "📘 Tutorial"])
 
@@ -417,5 +415,6 @@ with tab_tutorial:
         """,
         unsafe_allow_html=True,
     )
+
 
 
