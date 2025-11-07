@@ -162,7 +162,7 @@ st.markdown(
         gap:12px;
         margin:12px 0 24px;
     ">
-      <img src="data:image/png;base64,{b64}" width="80" style="border-radius:10px;">
+      <img src="data:image/png;base64,{b64}" width="100" style="border-radius:10px;">
       <span style="
           font-family:'Montserrat Alternates', sans-serif;
           font-weight:700;
@@ -429,6 +429,7 @@ with tab_tutorial:
         """,
         unsafe_allow_html=True,
     )
+
 
 
 
