@@ -144,7 +144,23 @@ def ddm_gate(dps, price):
         return False
 
 # ------------- APP -------------
-st.title("VALUTATORE AZIONI")
+st.markdown(
+    """
+    <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:10px;margin-bottom:25px;">
+      <img src="logo.png" width="50" style="border-radius:10px;">
+      <h1 style="
+          font-family:'Georgia', 'Garamond', serif;
+          font-style:italic;
+          color:#1e3a8a;
+          font-size:2.2em;
+          margin:0;
+      ">
+        Valutatore Azioni – Finanza
+      </h1>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 tab_analisi, tab_tutorial = st.tabs(["📊 Analisi", "📘 Tutorial"])
 
@@ -398,3 +414,4 @@ with tab_tutorial:
         """,
         unsafe_allow_html=True,
     )
+
