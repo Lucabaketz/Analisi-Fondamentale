@@ -162,7 +162,7 @@ st.markdown(
         gap:12px;
         margin:12px 0 24px;
     ">
-      <img src="data:image/png;base64,{b64}" width="70" style="border-radius:10px;">
+      <img src="data:image/png;base64,{b64}" width="80" style="border-radius:10px;">
       <span style="
           font-family:'Montserrat Alternates', sans-serif;
           font-weight:700;
@@ -170,7 +170,7 @@ st.markdown(
           font-size:2.2em;
           letter-spacing:0.4px;
       ">
-        Valutatore Azioni
+        Valutatore   Azioni
       </span>
     </div>
     """,
@@ -429,6 +429,7 @@ with tab_tutorial:
         """,
         unsafe_allow_html=True,
     )
+
 
 
 
