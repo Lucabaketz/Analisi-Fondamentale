@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+import base64
+from pathlib import Path
 
 # =========================
 # STILE (tema blu minimal)
@@ -143,10 +145,9 @@ def ddm_gate(dps, price):
     except Exception:
         return False
 
-# ------------- APP -------------
-import base64
-from pathlib import Path
-
+# ================
+# Logo / Header
+# ================
 def img_to_base64(p):
     return base64.b64encode(Path(p).read_bytes()).decode()
 
@@ -170,7 +171,7 @@ st.markdown(
           font-size:2.2em;
           letter-spacing:0.4px;
       ">
-        Valutatore   Azioni
+        Valutatore Azioni
       </span>
     </div>
     """,
@@ -189,12 +190,8 @@ with tab_analisi:
     tickers_from_custom = [t.strip().upper() for t in custom.split(",") if t.strip()]
     tickers = (tickers_from_custom or tickers_from_menu)[:2]
 
-    show_debug  = st.toggle("Mostra pannello debug", value=True)
-
-    with st.expander("⚙️ Assunzioni DDM"):
-        c1,c2 = st.columns(2)
-        with c1: r_req = st.number_input("Tasso di sconto r (%)", value=9.0, step=0.5)/100.0
-        with c2: g_term = st.number_input("Crescita g (%)", value=2.0, step=0.25)/100.0
+    # Buffer per il debug (lo mostreremo in fondo)
+    _debug_rows = []
 
     for tkr in tickers:
         st.markdown(f"## {tkr}")
@@ -239,7 +236,7 @@ with tab_analisi:
                 pass
 
         # ------------------ MULTIPLI ------------------
-        st.markdown("### 🔹 Campi per Fair Value dai multipli")
+        st.markdown("### 🔹 Campi per modello dei multipli")
         curr_pe_t = (price/eps_t) if (price and eps_t and eps_t>0) else None
         curr_pe_f = (price/eps_f) if (price and eps_f and eps_f>0) else None
         curr_pe = ( (curr_pe_t + curr_pe_f)/2 if (curr_pe_t and curr_pe_f) else (curr_pe_f or curr_pe_t) )
@@ -266,24 +263,84 @@ with tab_analisi:
             st.warning("P/FCF: dato FCF per azione non disponibile. Inserisci manualmente il FCF per azione per abilitare il calcolo.")
             fcf_ps = st.number_input(f"FCF per azione ({tkr}) – inserisci", min_value=0.0, value=0.0, step=0.01, key=f"{tkr}_fcf_ps_manual") or None
 
-        # fair values
+        # fair values multipli
         fv_pe = (eps_f or eps_t) * pe_star if ((eps_f or eps_t) and pe_star>0) else None
         fv_pb = bvps * pb_star if (bvps and pb_star>0) else None
         fv_pebitda = (ebitda_ps * pebitda_star) if (ebitda_ps and pebitda_star>0) else None
         fv_ps = (sales_ps * ps_star) if (sales_ps and ps_star>0) else None
         fv_pfcf = (fcf_ps * pfcf_star) if (fcf_ps and pfcf_star>0) else None
 
-        # ------------------ DDM ------------------
-        st.markdown("### 💸 Fair Value RISULTATI")
+        # ------------------ DDM + RISULTATI ------------------
+        st.markdown("### 🔹 Campi per modello DDM ")
+
+        # candidati DPS
         dps_ttm = get_dps_ttm(tkr)
         forward_div = info.get("forward_dividend_rate")
         trailing_div = info.get("trailing_dividend_rate")
+        payout_ratio = info.get("payout")
         eps_for_div = (eps_f or eps_t)
-        dps_eff, dps_src = select_dividend(price, forward_div, trailing_div, dps_ttm, info.get("payout"), eps_for_div)
-        fv_ddm = gordon_fair_value(dps_eff, r_req, g_term)
-        if not ddm_gate(dps_eff, price):
+
+        # selezione automatica iniziale
+        dps_auto, dps_src = select_dividend(price, forward_div, trailing_div, dps_ttm, payout_ratio, eps_for_div)
+
+        with st.expander("🔎 Dividendo & Assunzioni DDM"):
+            # blocco fonti DPS
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Forward DPS", fmt2(forward_div), help="forwardAnnualDividendRate")
+                if price: st.caption(f"Yield: {fmt2((forward_div or 0)/price*100)}%")
+            with c2:
+                st.metric("TTM DPS (12m)", fmt2(dps_ttm))
+                if price: st.caption(f"Yield: {fmt2((dps_ttm or 0)/price*100)}%")
+            with c3:
+                st.metric("Trailing DPS", fmt2(trailing_div))
+                if price: st.caption(f"Yield: {fmt2((trailing_div or 0)/price*100)}%")
+            with c4:
+                est = (eps_for_div or 0)*(payout_ratio or 0) if (eps_for_div and payout_ratio and 0<=payout_ratio<=1) else None
+                st.metric("Stima payout (EPS×payout)", fmt2(est))
+                if price: st.caption(f"Yield: {fmt2((est or 0)/price*100)}%")
+
+            st.markdown(f"**Selezione automatica DPS:** `{dps_src or 'N/D'}` → **{fmt2(dps_auto)} {price_ccy}**")
+
+            # selettore fonte opzionale
+            src_choice = st.selectbox(
+                "Fonte DPS (opzionale)",
+                ["AUTO","FORWARD","TTM","TRAILING","PAYOUT","MANUAL"],
+                index=0, key=f"{tkr}_dps_src_choice"
+            )
+
+            # valore iniziale del campo numerico
+            default_dps = dps_auto or 0.0
+            if src_choice == "FORWARD" and forward_div is not None: default_dps = forward_div
+            elif src_choice == "TTM" and dps_ttm is not None:       default_dps = dps_ttm
+            elif src_choice == "TRAILING" and trailing_div is not None: default_dps = trailing_div
+            elif src_choice == "PAYOUT" and (eps_for_div and payout_ratio and 0<=payout_ratio<=1):
+                default_dps = eps_for_div * payout_ratio
+
+            dps_manual = st.number_input(
+                "DPS usato per DDM", min_value=0.0, value=float(default_dps), step=0.01, key=f"{tkr}_dps_used"
+            )
+
+            # assunzioni DDM (r, g) qui dentro come richiesto
+            a1, a2 = st.columns(2)
+            with a1:
+                r_req = st.number_input("Tasso di sconto r (%)", value=9.0, step=0.5, key=f"{tkr}_r")/100.0
+            with a2:
+                g_term = st.number_input("Crescita g (%)", value=2.0, step=0.25, key=f"{tkr}_g")/100.0
+
+            # definisci la "fonte" visualizzata
+            use_src = (
+                "MANUAL" if src_choice=="MANUAL"
+                else (src_choice if src_choice!="AUTO" else (dps_src or "N/D"))
+            )
+
+        # calcolo FV DDM
+        dps_used = dps_manual
+        fv_ddm = gordon_fair_value(dps_used, r_req, g_term)
+        if not ddm_gate(dps_used, price):
             fv_ddm = None
 
+        # util per stampa FV
         def line_fv(label, fv):
             if fv is None:
                 st.write(f"- **{label}:** N/D")
@@ -291,7 +348,7 @@ with tab_analisi:
                 delta = f" (Δ {((fv-price)/price*100):.1f}%)" if (price and price>0) else ""
                 st.write(f"- **{label}:** {fv:.2f} {price_ccy}{delta}")
 
-        st.markdown("#### 📌 Risultati per modello")
+        st.markdown("#### 📌 Risultati PREZZO TEORICO per modello")
         line_fv("P/E", fv_pe)
         st.caption("↳ Basato sugli utili (EPS); utile per aziende con utili stabili/crescenti.")
         line_fv("P/BV", fv_pb)
@@ -300,19 +357,12 @@ with tab_analisi:
         st.caption("↳ Utile per business capital-intensive.  - Per calcolo inserire dati manualmente ")
         line_fv("P/Sales", fv_ps)
         st.caption("↳ Adatto a società growth/early-stage.  - Per calcolo inserire dati manualmente ")
-        line_fv("P/FCF", fv_pfcf)
-        st.caption("↳ Valorizza la capacità di generare cassa.  - Per calcolo inserire dati manualmente ")
-        line_fv("DDM (Gordon)", fv_ddm)
-        st.caption("↳ Basato sul dividendo (priorità al forward); escluso se yield troppo basso (<0,5%).")
-
-        # ------------------ DEBUG ------------------
-        if show_debug:
-            with st.expander("🛠️ Debug & diagnostica"):
-                st.write(f"- **Valuta prezzo**: {price_ccy} | **Valuta contabile**: {fin_ccy}")
-                st.write(f"- **EPS T**: {fmt2(eps_t)} | **EPS F**: {fmt2(eps_f)} | **BV/az**: {fmt2(bvps)} | **EBITDA/az**: {fmt2(ebitda_ps)} | **Sales/az**: {fmt2(sales_ps)} | **FCF/az**: {fmt2(fcf_ps)}")
+        ddm_label = f"DDM (Gordon) — DPS fonte: {use_src}"
+        line_fv(ddm_label, fv_ddm)
+        st.caption("↳ Basato sul dividendo; escluso se yield troppo basso (<0,5%) o DPS non valido.")
 
         # ======================
-        # COMMENTo FINALE (semplificato come richiesto)
+        # COMMENTO FINALE (semplificato)
         # ======================
         st.subheader(f"Commento finale su {tkr}")
 
@@ -342,22 +392,24 @@ with tab_analisi:
         qual_map = {0:"Debole",1:"Debole",2:"Misto",3:"Buono",4:"Ottimo"}
         qual_label = qual_map[score]
 
-        payout = info.get("payout")
         div_flag = None
-        if payout is not None:
-            if payout > 1.0:
+        if payout_ratio is not None:
+            if payout_ratio > 1.0:
                 div_flag = "Payout >100%: sostenibilità del dividendo a rischio."
-            elif payout < 0.2 and fv_ddm is not None:
+            elif payout_ratio < 0.2 and fv_ddm is not None:
                 div_flag = "Payout contenuto: spazio per crescita dividendi, se utili in aumento."
 
-        ddm_reason = "DDM non applicato (yield <0,5% o dati dividendo non utilizzabili)." if fv_ddm is None else f"DDM applicato (fonte dividendo: {dps_src})."
+        ddm_reason = (
+            "DDM non applicato (yield <0,5% o DPS non utilizzabile)."
+            if fv_ddm is None else f"DDM applicato (DPS fonte: {use_src})."
+        )
 
         st.markdown(
             f"""
             <div class="blue-card">
               <div>
                 <span class="tag">Profilo qualitativo: {qual_label}</span>
-                <span class="tag">Payout: {fmt2(payout) if payout is not None else 'N/D'}</span>
+                <span class="tag">Payout: {fmt2(payout_ratio) if payout_ratio is not None else 'N/D'}</span>
               </div>
               <p class="note" style="margin-top:.5rem">Commento basato <b>solo</b> su differenziali vs <b>P/E</b> e <b>DDM</b> (se applicabile).</p>
               <ul class="tight">
@@ -372,6 +424,22 @@ with tab_analisi:
         )
 
         st.warning("⚠️ Analisi informativa; non costituisce consulenza finanziaria. ATTENZIONE: i dati inseriti in automatico potrebbero essere errati", icon="⚠️")
+
+        # ====== DEBUG: accumula riga per ticker ======
+        _debug_rows.append(
+            f"- [{tkr}] Valuta prezzo: {price_ccy} | Valuta contabile: {fin_ccy} | "
+            f"EPS T: {fmt2(eps_t)} | EPS F: {fmt2(eps_f)} | "
+            f"BV/az: {fmt2(bvps)} | EBITDA/az: {fmt2(ebitda_ps)} | Sales/az: {fmt2(sales_ps)} | FCF/az: {fmt2(fcf_ps)} | "
+            f"DDM → DPS_auto: {fmt2(dps_auto)} (src={dps_src}), DPS_used: {fmt2(dps_used)} (src={use_src}), r={r_req:.3f}, g={g_term:.3f}"
+        )
+
+    # ====== DEBUG in fondo alla pagina ======
+    st.markdown("---")
+    show_debug = st.toggle("Mostra pannello debug", value=True, key="show_debug_bottom")
+    if show_debug and _debug_rows:
+        with st.expander("🛠️ Debug & diagnostica (tutti i ticker)"):
+            for row in _debug_rows:
+                st.write(row)
 
 with tab_tutorial:
     st.markdown("## 📘 Tutorial – Istruzioni pratiche per usare l’app")
@@ -429,10 +497,3 @@ with tab_tutorial:
         """,
         unsafe_allow_html=True,
     )
-
-
-
-
-
-
-
