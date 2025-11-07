@@ -359,7 +359,7 @@ with tab_analisi:
         st.caption("↳ Adatto a società growth/early-stage.  - Per calcolo inserire dati manualmente ")
         ddm_label = f"DDM (Gordon) — DPS fonte: {use_src}"
         line_fv(ddm_label, fv_ddm)
-        st.caption("↳ Basato sul dividendo; escluso se yield troppo basso (<0,5%) o DPS non valido.")
+        st.caption("↳ Basato sul dividendo; escluso se yield troppo basso (<0,5%) o DPS non valido. Nota bene: il dato potrebbe essere fuorviante con valori di Dividend yield bassi")
 
         # ======================
         # COMMENTO FINALE (semplificato)
@@ -452,16 +452,25 @@ with tab_tutorial:
             <li>Attiva <b>Debug</b> per vedere rapidamente EPS, BV/az, EBITDA/az, Sales/az, FCF/az.</li>
           </ul>
 
-          <h4>2) Imposta (se vuoi) il DDM</h4>
-          <ul class="tight">
-            <li>Nel pannello “Assunzioni DDM” imposta <b>r</b> (tasso di sconto) e <b>g</b> (crescita di lungo periodo).</li>
-            <li>Il DDM viene usato solo se il <b>dividend yield</b> è abbastanza significativo (≥0,5%) e i dati sono coerenti.</li>
-          </ul>
-
-          <h4>3) Imposta i multipli attesi</h4>
+          <h4>2) Imposta i multipli attesi</h4>
           <ul class="tight">
             <li>Per il commento finale conta <b>solo</b> il fair value da <b>P/E</b> e da <b>DDM</b> (se applicabile).</li>
             <li>Puoi comunque impostare anche P/BV, P/EBITDA, P/Sales, P/FCF (visibili nei risultati ma non usati nel commento finale).</li>
+          </ul>
+
+          <h4>3) Imposta (se vuoi) il DDM</h4>
+          <ul class="tight">
+            <li>Apri il pannello <b>“🔎 Dividendo & Assunzioni DDM”</b> per ogni ticker.</li>
+            <li>Controlla le <b>4 fonti DPS</b> mostrate (Forward, TTM 12 mesi, Trailing, Stima EPS×payout) e il <b>DPS selezionato automaticamente</b>.</li>
+            <li>Se vuoi, scegli tu la <b>Fonte DPS</b> dal menu (AUTO/FORWARD/TTM/TRAILING/PAYOUT/MANUAL): l’app pre-compila il valore.</li>
+            <li>Puoi <b>modificare direttamente il DPS</b> nel campo numerico; se lo cambi o scegli MANUAL, la fonte diventa “MANUAL”.</li>
+            <li>Imposta le <b>assunzioni DDM</b>:
+              <ul class="tight">
+                <li><b>r</b> = tasso di sconto (%)</li>
+                <li><b>g</b> = crescita di lungo periodo (%)</li>
+              </ul>
+            </li>
+            <li>Il DDM viene applicato solo se il <b>dividend yield</b> risultante è almeno <b>0,5%</b> e il DPS è considerato valido; altrimenti è escluso automaticamente.</li>
           </ul>
 
           <h4>4) Dati mancanti? Come recuperarli</h4>
