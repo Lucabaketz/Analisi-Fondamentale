@@ -151,11 +151,25 @@ def img_to_base64(p):
     return base64.b64encode(Path(p).read_bytes()).decode()
 
 b64 = img_to_base64("logo.png")
+
 st.markdown(
     f"""
-    <div style="display:flex;justify-content:center;align-items:center;gap:12px;margin:12px 0 24px;">
-      <img src="data:image/png;base64,{b64}" width="48">
-      <span style="font-family:'Georgia','Garamond',serif;font-style:italic;color:#1e3a8a;font-size:2.1em;">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat+Alternates:wght@700&display=swap" rel="stylesheet">
+    <div style="
+        display:flex;
+        justify-content:center;
+        align-items:center;
+        gap:12px;
+        margin:12px 0 24px;
+    ">
+      <img src="data:image/png;base64,{b64}" width="60" style="border-radius:10px;">
+      <span style="
+          font-family:'Montserrat Alternates', sans-serif;
+          font-weight:700;
+          color:#1e3a8a;
+          font-size:2.2em;
+          letter-spacing:0.4px;
+      ">
         Valutatore Azioni – Finanza
       </span>
     </div>
@@ -415,6 +429,7 @@ with tab_tutorial:
         """,
         unsafe_allow_html=True,
     )
+
 
 
 
