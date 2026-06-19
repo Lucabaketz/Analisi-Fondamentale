@@ -263,6 +263,46 @@ def dcf_fcff(fcf0, g, years, term_g, discount, net_debt, shares):
     pv += tv / (1 + discount)**years
     return (pv - (net_debt or 0)) / shares
 
+def dcf_diagnose(fcf0, g, years, term_g, discount, net_debt, shares):
+    """Restituisce (enterprise_value, equity_value, fair_value, lista_avvisi).
+    Spiega in modo leggibile perche' il DCF e' negativo o inaffidabile."""
+    warns = []
+    if discount is None or shares in (None, 0):
+        return None, None, None, ["Dati insufficienti (WACC o numero azioni mancante)."]
+    if discount <= term_g:
+        warns.append(f"WACC ({discount*100:.1f}%) <= crescita terminale ({term_g*100:.1f}%): "
+                     f"il valore terminale diventa infinito/negativo. Abbassa la crescita terminale.")
+        return None, None, None, warns
+
+    # Enterprise value (senza togliere il debito)
+    pv = 0.0; cf = fcf0 if fcf0 is not None else 0.0
+    for yr in range(1, years+1):
+        cf *= (1 + g)
+        pv += cf / (1 + discount)**yr
+    tv = cf * (1 + term_g) / (discount - term_g)
+    pv += tv / (1 + discount)**years
+    ev = pv
+    nd = net_debt or 0
+    equity = ev - nd
+    fv = equity / shares
+
+    # diagnosi
+    if fcf0 is None:
+        warns.append("FCF di partenza non disponibile: impossibile calcolare un DCF affidabile.")
+    elif fcf0 < 0:
+        warns.append(f"FCF di partenza NEGATIVO ({fmt_big(fcf0)}): l'azienda sta bruciando cassa. "
+                     f"Su questo profilo il DCF non e' lo strumento adatto - usa i multipli (P/Sales) o scenari.")
+    if ev > 0 and nd > ev:
+        warns.append(f"Debito netto ({fmt_big(nd)}) SUPERA l'enterprise value ({fmt_big(ev)}): "
+                     f"cio' che resta agli azionisti e' negativo. Titolo molto indebitato, "
+                     f"il FCFF qui e' fragile (basta un EV stimato poco diverso per ribaltare il segno).")
+    # term_g vicino al WACC -> TV dominante
+    if 0 < (discount - term_g) < 0.02:
+        peso_tv = (tv / (1 + discount)**years) / ev if ev else 0
+        warns.append(f"WACC e crescita terminale molto vicini (spread {(discount-term_g)*100:.1f} punti): "
+                     f"il valore terminale pesa per il {peso_tv*100:.0f}% del totale e rende il risultato instabile.")
+    return ev, equity, fv, warns
+
 def reverse_dcf_growth(price, fcf0, years, term_g, discount, net_debt, shares):
     if not all(v is not None for v in [price, fcf0, discount, shares]) or shares <= 0:
         return None
@@ -462,6 +502,28 @@ if section.endswith("Valutazione"):
         st.markdown(f'<span class="muted">{desc}</span>', unsafe_allow_html=True)
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
+    # ---------- DIAGNOSTICA DCF ----------
+    ev, eq, fv_check, warns = dcf_diagnose(fcf_base, g_fcf, years, term_g, wacc_val, net_debt, sh)
+    dcf_value = models[0][1]
+    show_diag = (dcf_value is None) or (dcf_value is not None and dcf_value < 0) or bool(warns)
+    if show_diag:
+        with st.expander(":mag: Perche' il DCF ha questo risultato? (diagnostica)", expanded=(dcf_value is None or (dcf_value is not None and dcf_value < 0))):
+            if ev is not None:
+                d1, d2, d3 = st.columns(3)
+                d1.markdown(f'<div class="kpi"><div class="l">Enterprise Value</div><div class="v">{fmt_big(ev)}</div></div>', unsafe_allow_html=True)
+                d2.markdown(f'<div class="kpi"><div class="l">- Debito netto</div><div class="v">{fmt_big(net_debt)}</div></div>', unsafe_allow_html=True)
+                d3.markdown(f'<div class="kpi"><div class="l">= Equity / azioni</div><div class="v">{fmt(fv_check)} {ccy}</div></div>', unsafe_allow_html=True)
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                st.caption(f"Catena del calcolo: FCF base **{fmt_big(fcf_base)}**, cresce al **{g_fcf*100:.1f}%**/anno per "
+                           f"**{years} anni**, scontato al WACC **{wacc_val*100:.1f}%**, + valore terminale "
+                           f"(crescita perpetua **{term_g*100:.1f}%**) = Enterprise Value. Tolto il debito netto e "
+                           f"diviso per **{fmt_big(sh)}** azioni.")
+            if warns:
+                for w in warns:
+                    st.warning(w)
+            else:
+                st.success("Nessuna anomalia rilevata: il DCF e' calcolabile e i parametri sono coerenti.")
 
     # ---------- REVERSE DCF ----------
     st.markdown("## :arrows_counterclockwise: Reverse DCF - cosa sta scontando il mercato")
