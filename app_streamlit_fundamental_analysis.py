@@ -5,12 +5,14 @@ import yfinance as yf
 
 # =============================================================
 #  VALUTATORE AZIENDE + CORSO DI FINANZA
-#  - Valutazione: DCF (FCFF) · Reverse DCF · Sensitivity · DDM · Multipli
+#  - Valutazione: DCF (FCFF) - Reverse DCF - Sensitivity - DDM - Multipli
+#    con multipli di default calcolati dallo storico del titolo (mediana),
+#    sempre modificabili a mano.
 #  - Corso: lezioni dalle basi, pensato per crescere 1 lezione/settimana
 #  Dati letti dai prospetti finanziari (non solo da .info).
 # =============================================================
 
-st.set_page_config(page_title="Valutatore Aziende", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Valutatore Aziende", layout="wide", page_icon=":chart_with_upwards_trend:")
 
 # ---------- STILE ----------
 st.markdown("""
@@ -64,8 +66,8 @@ def row(df, *names):
                 return f(s.iloc[0])
     return None
 
-def row_series(df, *names):
-    """Restituisce l'intera riga (più anni) per medie/normalizzazione."""
+def full_row(df, *names):
+    """Riga completa (tutti gli anni) come Series indicizzata per data."""
     if df is None or df.empty: return None
     for n in names:
         if n in df.index:
@@ -73,6 +75,83 @@ def row_series(df, *names):
             if not s.empty:
                 return s.astype(float)
     return None
+
+# =============================================================
+#  MULTIPLI STORICI (mediana sul titolo)
+# =============================================================
+def _naive(ts):
+    """Timestamp senza timezone, per confronti uniformi."""
+    ts = pd.Timestamp(ts)
+    return ts.tz_localize(None) if ts.tz is not None else ts
+
+def price_at(date, price_hist_naive):
+    """Ultimo prezzo di chiusura alla data del bilancio (o subito prima)."""
+    if price_hist_naive is None or price_hist_naive.empty:
+        return None
+    d = _naive(date)
+    window = price_hist_naive[price_hist_naive.index <= d]
+    return float(window.iloc[-1]) if not window.empty else None
+
+def hist_multiple(price_hist_naive, per_share_by_date):
+    """Mediana del rapporto prezzo/metrica anno per anno. Ritorna (mediana, n_anni)."""
+    ratios = []
+    for d, ps in per_share_by_date.items():
+        px = price_at(d, price_hist_naive)
+        if px and ps and ps > 0:
+            r = px / ps
+            if 0 < r < 1000:  # scarta outlier assurdi
+                ratios.append(r)
+    if len(ratios) >= 2:
+        return float(np.median(ratios)), len(ratios)
+    return None, len(ratios)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def historical_multiples(symbol: str, shares_now: float):
+    """Calcola P/E, P/BV, P/Sales, P/EBITDA, P/FCF storici (mediana) dal titolo.
+    Usa prospetti annuali + prezzo storico allineato alla data di ciascun bilancio."""
+    t = yf.Ticker(symbol)
+    inc = getattr(t, "income_stmt", None)
+    bs  = getattr(t, "balance_sheet", None)
+    cf  = getattr(t, "cashflow", None)
+    try:
+        ph = t.history(period="6y")["Close"].dropna()
+        if ph is not None and not ph.empty and ph.index.tz is not None:
+            ph.index = ph.index.tz_localize(None)  # uniforma a tz-naive
+    except Exception:
+        ph = None
+
+    # serie per-azione per data (n. azioni: usa quello attuale come proxy stabile)
+    eps_s    = full_row(inc, "Diluted EPS", "Basic EPS")
+    if eps_s is None:
+        ni = full_row(inc, "Net Income", "Net Income Common Stockholders")
+        eps_s = (ni / shares_now) if (ni is not None and shares_now) else None
+    equity_s = full_row(bs, "Stockholders Equity", "Total Equity Gross Minority Interest")
+    rev_s    = full_row(inc, "Total Revenue", "Operating Revenue")
+    ebitda_s = full_row(inc, "EBITDA", "Normalized EBITDA")
+    cfo_s    = full_row(cf, "Operating Cash Flow", "Cash Flow From Continuing Operating Activities")
+    capex_s  = full_row(cf, "Capital Expenditure", "Purchase Of PPE")
+    fcf_s = None
+    if cfo_s is not None and capex_s is not None:
+        fcf_s = (cfo_s + capex_s).dropna()
+
+    def per_share(series):
+        if series is None or shares_now in (None, 0):
+            return {}
+        return {_naive(d): (float(v) / shares_now) for d, v in series.items() if v == v}
+
+    def per_share_direct(series):
+        if series is None:
+            return {}
+        return {_naive(d): float(v) for d, v in series.items() if v == v}
+
+    out = {}
+    # EPS gia' per-azione (non dividere per le azioni)
+    out["P/E"]      = hist_multiple(ph, per_share_direct(eps_s))
+    out["P/BV"]     = hist_multiple(ph, per_share(equity_s))
+    out["P/Sales"]  = hist_multiple(ph, per_share(rev_s))
+    out["P/EBITDA"] = hist_multiple(ph, per_share(ebitda_s))
+    out["P/FCF"]    = hist_multiple(ph, per_share(fcf_s))
+    return out
 
 # =============================================================
 #  DATA LAYER
@@ -125,9 +204,8 @@ def load_company(symbol: str):
     if fcf is None and cfo is not None and capex is not None:
         fcf = cfo + capex
 
-    # FCF normalizzato (media degli anni disponibili)
-    cfo_s   = row_series(cf, "Operating Cash Flow", "Cash Flow From Continuing Operating Activities")
-    capex_s = row_series(cf, "Capital Expenditure", "Purchase Of PPE")
+    cfo_s   = full_row(cf, "Operating Cash Flow", "Cash Flow From Continuing Operating Activities")
+    capex_s = full_row(cf, "Capital Expenditure", "Purchase Of PPE")
     fcf_norm = None
     if cfo_s is not None and capex_s is not None:
         merged = (cfo_s + capex_s).dropna()
@@ -186,12 +264,11 @@ def dcf_fcff(fcf0, g, years, term_g, discount, net_debt, shares):
     return (pv - (net_debt or 0)) / shares
 
 def reverse_dcf_growth(price, fcf0, years, term_g, discount, net_debt, shares):
-    """Trova la crescita g (anni espliciti) che rende fair value == prezzo.
-    Restituisce g implicita, oppure None se non trovata nel range."""
     if not all(v is not None for v in [price, fcf0, discount, shares]) or shares <= 0:
         return None
+    if fcf0 <= 0 or discount <= term_g:
+        return None
     target_equity = price * shares + (net_debt or 0)
-    lo, hi = -0.50, 0.60
     def pv_for(g):
         pv = 0.0; cf = fcf0
         for yr in range(1, years+1):
@@ -200,7 +277,7 @@ def reverse_dcf_growth(price, fcf0, years, term_g, discount, net_debt, shares):
         tv = cf * (1 + term_g) / (discount - term_g)
         pv += tv / (1 + discount)**years
         return pv
-    # bisezione
+    lo, hi = -0.50, 0.60
     if (pv_for(lo) - target_equity) * (pv_for(hi) - target_equity) > 0:
         return None
     for _ in range(80):
@@ -222,32 +299,33 @@ def multiple_fv(metric, mult):
 # =============================================================
 #  NAVIGAZIONE
 # =============================================================
-section = st.sidebar.radio("Sezione", ["📈 Valutazione", "📚 Corso di finanza"], index=0)
+section = st.sidebar.radio("Sezione", [":chart_with_upwards_trend: Valutazione", ":books: Corso di finanza"], index=0)
 
 # #############################################################
-#  SEZIONE 1 — VALUTAZIONE
+#  SEZIONE 1 - VALUTAZIONE
 # #############################################################
-if section == "📈 Valutazione":
-    st.markdown("# 📈 Valutatore Aziende")
-    st.markdown('<p class="muted">DCF · Reverse DCF · Sensitivity · DDM · Multipli. '
+if section.endswith("Valutazione"):
+    st.markdown("# :chart_with_upwards_trend: Valutatore Aziende")
+    st.markdown('<p class="muted">DCF - Reverse DCF - Sensitivity - DDM - Multipli. '
                 'Dati dai prospetti finanziari. Strumento informativo, non consulenza.</p>', unsafe_allow_html=True)
 
     PRESET = {
         "Apple":"AAPL","Microsoft":"MSFT","NVIDIA":"NVDA","Alphabet":"GOOGL","Amazon":"AMZN",
         "Coca-Cola":"KO","Johnson & Johnson":"JNJ","ENEL":"ENEL.MI","ENI":"ENI.MI",
-        "Intesa Sanpaolo":"ISP.MI","Ferrari":"RACE.MI","LVMH":"MC.PA","Nestlé":"NESN.SW","ASML":"ASML",
+        "Intesa Sanpaolo":"ISP.MI","Ferrari":"RACE.MI","LVMH":"MC.PA","Nestle":"NESN.SW","ASML":"ASML",
     }
     c1, c2 = st.columns([2, 3])
-    with c1: choice = st.selectbox("Titolo dall'elenco", ["—"] + list(PRESET.keys()))
+    with c1: choice = st.selectbox("Titolo dall'elenco", ["-"] + list(PRESET.keys()))
     with c2: manual = st.text_input("Oppure un ticker (es. AAPL, ENEL.MI)", "")
-    ticker = manual.strip().upper() or (PRESET.get(choice) if choice != "—" else None)
+    ticker = manual.strip().upper() or (PRESET.get(choice) if choice != "-" else None)
 
     if not ticker:
         st.info("Seleziona un titolo o inserisci un ticker per iniziare.")
         st.stop()
 
-    with st.spinner(f"Carico i dati di {ticker}…"):
+    with st.spinner(f"Carico i dati di {ticker}..."):
         D = load_company(ticker)
+        HM = historical_multiples(ticker, D["shares"]) if D["shares"] else {}
 
     price = D["price"]; ccy = D["currency"]
     if price is None:
@@ -255,10 +333,10 @@ if section == "📈 Valutazione":
         st.stop()
 
     if D["fin_currency"] and ccy and D["fin_currency"] != ccy:
-        st.warning(f"⚠️ Valute diverse: prezzo in **{ccy}**, bilanci in **{D['fin_currency']}**. "
+        st.warning(f":warning: Valute diverse: prezzo in **{ccy}**, bilanci in **{D['fin_currency']}**. "
                    f"I per-azione dai bilanci potrebbero non allinearsi al prezzo.")
 
-    st.markdown(f"## {D['name']}  ·  `{ticker}`")
+    st.markdown(f"## {D['name']}  -  `{ticker}`")
     k = st.columns(5)
     for col, (l, v) in zip(k, [
         ("Prezzo", f"{fmt(price)} {ccy}"), ("Cap.", fmt_big(D["mktcap"])),
@@ -266,7 +344,7 @@ if section == "📈 Valutazione":
         ("Aliquota", fmt(D["tax_rate"]*100, 1, "%"))]):
         col.markdown(f'<div class="kpi"><div class="l">{l}</div><div class="v">{v}</div></div>', unsafe_allow_html=True)
 
-    with st.expander("📑 Dati di bilancio letti"):
+    with st.expander(":page_facing_up: Dati di bilancio letti"):
         g1, g2, g3 = st.columns(3)
         with g1:
             st.markdown("**Conto economico**")
@@ -290,7 +368,7 @@ if section == "📈 Valutazione":
     net_debt = (D["total_debt"] or 0) - (D["cash"] or 0)
 
     # ---------- PARAMETRI ----------
-    st.sidebar.markdown("## ⚙️ Parametri")
+    st.sidebar.markdown("## :gear: Parametri")
     st.sidebar.markdown("### Costo del capitale")
     rf  = st.sidebar.slider("Risk-free (%)", 0.0, 8.0, 3.5, 0.1)/100
     erp = st.sidebar.slider("Equity risk premium (%)", 3.0, 10.0, 5.5, 0.1)/100
@@ -300,11 +378,11 @@ if section == "📈 Valutazione":
                            float(round(min(max(kd_auto*100,1.0),12.0),1)), 0.1)/100
     ke = rf + beta_in*erp
     wacc_val = wacc(beta_in, rf, erp, kd, D["tax_rate"], D["mktcap"] or 0, D["total_debt"] or 0)
-    st.sidebar.markdown(f"**Ke:** {ke*100:.2f}% &nbsp;·&nbsp; **WACC:** {wacc_val*100:.2f}%")
+    st.sidebar.markdown(f"**Ke:** {ke*100:.2f}%  -  **WACC:** {wacc_val*100:.2f}%")
 
     st.sidebar.markdown("### Crescita DCF")
     use_norm = st.sidebar.checkbox("Usa FCF medio (normalizzato)", value=True,
-                                   help="Parte dalla media pluriennale invece che dall'ultimo anno (meno sensibile ad anni anomali).")
+                                   help="Parte dalla media pluriennale invece che dall'ultimo anno.")
     g_fcf  = st.sidebar.slider("Crescita FCF (%/anno)", -5.0, 25.0, 6.0, 0.5)/100
     years  = st.sidebar.slider("Anni espliciti", 3, 15, 7, 1)
     term_g = st.sidebar.slider("Crescita terminale (%)", 0.0, 4.0, 2.0, 0.25)/100
@@ -314,8 +392,7 @@ if section == "📈 Valutazione":
     fcf_base = D["fcf_norm"] if (use_norm and D["fcf_norm"]) else D["fcf"]
 
     # ---------- FAIR VALUE ----------
-    st.markdown("## 🎯 Fair Value per modello")
-    fv_dcf = dcf_fcff(fcf_base, g_fcf, years, term_g, wacc_val, net_debt, D["shares"])
+    st.markdown("## :dart: Fair Value per modello")
     fv_ddm = ddm_gordon(D["dps"], ke, g_ddm)
     if not (D["dps"] and price and D["dps"]/price >= 0.005):
         fv_ddm = None
@@ -327,23 +404,51 @@ if section == "📈 Valutazione":
     ebitdaps = (D["ebitda"]/sh) if (D["ebitda"] and sh) else None
     fcfps    = (fcf_base/sh) if (fcf_base and sh) else None
 
-    st.markdown("#### Multipli attesi (modificabili)")
+    # default multipli = mediana storica del titolo (con fallback prudente)
+    def hist_default(key, fallback):
+        v = HM.get(key, (None, 0))
+        return (round(v[0], 1) if v[0] else fallback), (v[1] if v else 0)
+
+    pe_def,   pe_n   = hist_default("P/E", 18.0)
+    pb_def,   pb_n   = hist_default("P/BV", 2.5)
+    ps_def,   ps_n   = hist_default("P/Sales", 3.0)
+    pebd_def, pebd_n = hist_default("P/EBITDA", 12.0)
+    pfcf_def, pfcf_n = hist_default("P/FCF", 18.0)
+
+    st.markdown("#### Multipli attesi")
+    st.caption("Valori di default = **mediana storica del titolo** (ultimi anni disponibili su Yahoo). "
+               "Modificabili: cambia il numero se ritieni che il multiplo storico non sia piu appropriato. "
+               "Il numerino sotto indica su quanti anni e calcolata la mediana (piu anni = piu affidabile).")
     m = st.columns(5)
-    with m[0]: pe_x   = st.number_input("P/E", value=18.0, step=0.5)
-    with m[1]: pb_x   = st.number_input("P/BV", value=2.5, step=0.1)
-    with m[2]: ps_x   = st.number_input("P/Sales", value=3.0, step=0.1)
-    with m[3]: pebd_x = st.number_input("P/EBITDA", value=12.0, step=0.5)
-    with m[4]: pfcf_x = st.number_input("P/FCF", value=18.0, step=0.5)
+    with m[0]:
+        pe_x = st.number_input("P/E", value=float(pe_def), step=0.5)
+        st.caption(f"storico: {fmt(HM.get('P/E',(None,0))[0],1)} ({pe_n} anni)")
+    with m[1]:
+        pb_x = st.number_input("P/BV", value=float(pb_def), step=0.1)
+        st.caption(f"storico: {fmt(HM.get('P/BV',(None,0))[0],1)} ({pb_n} anni)")
+    with m[2]:
+        ps_x = st.number_input("P/Sales", value=float(ps_def), step=0.1)
+        st.caption(f"storico: {fmt(HM.get('P/Sales',(None,0))[0],1)} ({ps_n} anni)")
+    with m[3]:
+        pebd_x = st.number_input("P/EBITDA", value=float(pebd_def), step=0.5)
+        st.caption(f"storico: {fmt(HM.get('P/EBITDA',(None,0))[0],1)} ({pebd_n} anni)")
+    with m[4]:
+        pfcf_x = st.number_input("P/FCF", value=float(pfcf_def), step=0.5)
+        st.caption(f"storico: {fmt(HM.get('P/FCF',(None,0))[0],1)} ({pfcf_n} anni)")
+
+    if max(pe_n, pb_n, ps_n, pebd_n, pfcf_n) < 2:
+        st.info("Storico insufficiente per calcolare multipli affidabili: sono stati usati valori di default generici. "
+                "Frequente per titoli con pochi anni di bilanci su Yahoo.")
 
     models = [
-        ("DCF — FCFF", dcf_fcff(fcf_base, g_fcf, years, term_g, wacc_val, net_debt, sh),
-         "Sconta i flussi di cassa liberi al WACC. Cardine per società mature con FCF positivo."),
-        ("DDM — Gordon", fv_ddm, "Sconta i dividendi al costo dell'equity. Solo se yield ≥0,5%."),
-        ("P/E", multiple_fv(eps, pe_x), "EPS × P/E atteso."),
-        ("P/BV", multiple_fv(bvps, pb_x), "Book value/azione × P/BV. Rilevante per banche/assicurazioni."),
-        ("P/Sales", multiple_fv(salesps, ps_x), "Ricavi/azione × P/Sales. Per growth o società in perdita."),
-        ("P/EBITDA", multiple_fv(ebitdaps, pebd_x), "EBITDA/azione × multiplo. Per business capital-intensive."),
-        ("P/FCF", multiple_fv(fcfps, pfcf_x), "FCF/azione × multiplo."),
+        ("DCF - FCFF", dcf_fcff(fcf_base, g_fcf, years, term_g, wacc_val, net_debt, sh),
+         "Sconta i flussi di cassa liberi al WACC. Cardine per societa mature con FCF positivo."),
+        ("DDM - Gordon", fv_ddm, "Sconta i dividendi al costo dell'equity. Solo se yield >=0,5%."),
+        ("P/E", multiple_fv(eps, pe_x), "EPS x P/E (default = mediana storica)."),
+        ("P/BV", multiple_fv(bvps, pb_x), "Book value/azione x P/BV. Rilevante per banche/assicurazioni."),
+        ("P/Sales", multiple_fv(salesps, ps_x), "Ricavi/azione x P/Sales. Per growth o societa in perdita."),
+        ("P/EBITDA", multiple_fv(ebitdaps, pebd_x), "EBITDA/azione x multiplo. Per business capital-intensive."),
+        ("P/FCF", multiple_fv(fcfps, pfcf_x), "FCF/azione x multiplo."),
     ]
 
     def delta_html(fv):
@@ -353,15 +458,15 @@ if section == "📈 Valutazione":
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
     for name, fv, desc in models:
-        st.markdown(f"**{name}** — {delta_html(fv)}", unsafe_allow_html=True)
+        st.markdown(f"**{name}** - {delta_html(fv)}", unsafe_allow_html=True)
         st.markdown(f'<span class="muted">{desc}</span>', unsafe_allow_html=True)
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ---------- REVERSE DCF ----------
-    st.markdown("## 🔄 Reverse DCF — cosa sta scontando il mercato")
+    st.markdown("## :arrows_counterclockwise: Reverse DCF - cosa sta scontando il mercato")
     st.markdown('<p class="muted">Invece di chiedere "quanto vale?", calcola la crescita del FCF che il prezzo attuale '
-                'implica. Poi ti chiedi: è plausibile?</p>', unsafe_allow_html=True)
+                'implica. Poi ti chiedi: e plausibile?</p>', unsafe_allow_html=True)
     g_impl = reverse_dcf_growth(price, fcf_base, years, term_g, wacc_val, net_debt, sh)
     if g_impl is not None:
         cc = st.columns(3)
@@ -373,16 +478,16 @@ if section == "📈 Valutazione":
                 ("moderata" if g_impl > 0.02 else "conservativa/pessimista"))
         cc[2].markdown(f'<div class="kpi"><div class="l">Lettura</div>'
                        f'<div class="v">{plaus}</div></div>', unsafe_allow_html=True)
-        st.caption(f"Al WACC del {wacc_val*100:.1f}%, il prezzo di {fmt(price)} {ccy} è coerente con una crescita "
+        st.caption(f"Al WACC del {wacc_val*100:.1f}%, il prezzo di {fmt(price)} {ccy} e coerente con una crescita "
                    f"del FCF del {g_impl*100:.1f}% annuo per {years} anni. Confrontala con la crescita storica e "
-                   f"con le attese di settore: se ti sembra irrealistica, il titolo è caro (o a sconto).")
+                   f"con le attese di settore: se ti sembra irrealistica, il titolo e caro (o a sconto).")
     else:
         st.info("Reverse DCF non calcolabile con i dati/parametri attuali (es. FCF non positivo).")
 
     # ---------- SENSITIVITY ----------
-    st.markdown("## 🌡️ Sensitivity — fragilità del DCF")
-    st.markdown('<p class="muted">Il fair value del DCF al variare di WACC (righe) e crescita terminale (colonne). '
-                'Mostra quanto il numero dipende dalle ipotesi.</p>', unsafe_allow_html=True)
+    st.markdown("## :thermometer: Sensitivity - fragilita del DCF")
+    st.markdown('<p class="muted">Il fair value del DCF al variare di WACC (righe) e crescita terminale (colonne).</p>',
+                unsafe_allow_html=True)
     if fcf_base and sh:
         wacc_range = [wacc_val + d for d in (-0.015, -0.0075, 0, 0.0075, 0.015)]
         tg_range   = [max(0.0, term_g + d) for d in (-0.01, -0.005, 0, 0.005, 0.01)]
@@ -390,8 +495,7 @@ if section == "📈 Valutazione":
         for w in wacc_range:
             r = []
             for tg in tg_range:
-                v = dcf_fcff(fcf_base, g_fcf, years, tg, w, net_debt, sh)
-                r.append(v)
+                r.append(dcf_fcff(fcf_base, g_fcf, years, tg, w, net_debt, sh))
             grid.append(r)
         sens = pd.DataFrame(grid,
                             index=[f"WACC {w*100:.1f}%" for w in wacc_range],
@@ -404,7 +508,7 @@ if section == "📈 Valutazione":
         st.info("Sensitivity non disponibile (FCF non utilizzabile).")
 
     # ---------- SINTESI ----------
-    st.markdown("## 🧭 Sintesi")
+    st.markdown("## :compass: Sintesi")
     valid = [(n, fv) for n, fv, _ in models if fv is not None]
     if valid:
         fvs = [v for _, v in valid]
@@ -417,57 +521,50 @@ if section == "📈 Valutazione":
         sc = st.columns(4)
         sc[0].markdown(f'<div class="kpi"><div class="l">Prezzo</div><div class="v">{fmt(price)} {ccy}</div></div>', unsafe_allow_html=True)
         sc[1].markdown(f'<div class="kpi"><div class="l">FV mediano</div><div class="v">{fmt(fv_median)} {ccy}</div></div>', unsafe_allow_html=True)
-        sc[2].markdown(f'<div class="kpi"><div class="l">Range</div><div class="v">{fmt(min(fvs))}–{fmt(max(fvs))}</div></div>', unsafe_allow_html=True)
+        sc[2].markdown(f'<div class="kpi"><div class="l">Range</div><div class="v">{fmt(min(fvs))}-{fmt(max(fvs))}</div></div>', unsafe_allow_html=True)
         sc[3].markdown(f'<div class="kpi"><div class="l">Upside</div><div class="v {cls}">{upside:+.1f}%</div></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="card" style="margin-top:12px"><span class="pill">{verdict}</span> '
                     f'<span class="muted">Mediana di {len(valid)} modelli. Range ampio = i metodi non concordano = '
                     f'maggiore incertezza.</span></div>', unsafe_allow_html=True)
         chart_df = pd.DataFrame({"Fair Value": fvs}, index=[n for n, _ in valid])
-        chart_df.loc["▶ PREZZO"] = price
+        chart_df.loc["> PREZZO"] = price
         st.bar_chart(chart_df, height=280)
     else:
         st.info("Nessun modello applicabile con i dati disponibili.")
 
     st.markdown("---")
-    st.caption("⚠️ Strumento informativo. Dati da Yahoo Finance, possibili errori/ritardi. "
-               "Le valutazioni dipendono dalle assunzioni. Non è consulenza finanziaria.")
+    st.caption(":warning: Strumento informativo. Dati da Yahoo Finance, possibili errori/ritardi. "
+               "Le valutazioni dipendono dalle assunzioni. Non e consulenza finanziaria.")
 
 # #############################################################
-#  SEZIONE 2 — CORSO DI FINANZA
-#  Per aggiungere una lezione: copia un blocco {...} dentro LESSONS.
-#  Le lezioni appaiono automaticamente nel menu.
+#  SEZIONE 2 - CORSO DI FINANZA
 # #############################################################
 else:
-    st.markdown("# 📚 Corso di finanza — dalle basi")
+    st.markdown("# :books: Corso di finanza - dalle basi")
     st.markdown('<p class="muted">Un percorso che parte da zero e arriva ai modelli usati nella sezione Valutazione. '
                 'Si aggiunge una lezione alla volta.</p>', unsafe_allow_html=True)
 
-    # =========================================================
-    #  ELENCO LEZIONI
-    #  Ogni lezione = un dizionario. "body" accetta Markdown.
-    #  Aggiungere la lezione N+1 = aggiungere un dizionario in fondo.
-    # =========================================================
     LESSONS = [
         {
             "n": 1,
-            "title": "Cos'è un'azione",
-            "subtitle": "La quota di proprietà di un'azienda",
+            "title": "Cos'e un'azione",
+            "subtitle": "La quota di proprieta di un'azienda",
             "body": """
-**Un'azione è una frazione di proprietà di una società.** Se una società ha emesso 1.000 azioni
+**Un'azione e una frazione di proprieta di una societa.** Se una societa ha emesso 1.000 azioni
 e tu ne possiedi 10, possiedi l'1% dell'azienda: l'1% degli utili, dei beni e del diritto di voto.
 
-**Perché esistono?** Un'azienda che vuole crescere ha bisogno di capitale. Può indebitarsi (chiedere
-prestiti) oppure vendere quote di sé stessa a investitori. Vendendo azioni raccoglie denaro senza
-obbligo di restituirlo: in cambio cede una parte della proprietà e degli utili futuri.
+**Perche esistono?** Un'azienda che vuole crescere ha bisogno di capitale. Puo indebitarsi (chiedere
+prestiti) oppure vendere quote di se stessa a investitori. Vendendo azioni raccoglie denaro senza
+obbligo di restituirlo: in cambio cede una parte della proprieta e degli utili futuri.
 
 **Da cosa guadagni come azionista?** Da due fonti:
-- **Capital gain**: l'azione aumenta di valore e la rivendi a un prezzo più alto.
+- **Capital gain**: l'azione aumenta di valore e la rivendi a un prezzo piu alto.
 - **Dividendi**: l'azienda distribuisce parte dei suoi utili agli azionisti, di solito ogni anno.
 
-**Il prezzo di un'azione** non è il valore "vero" dell'azienda diviso per le azioni. È il punto in cui
+**Il prezzo di un'azione** non e il valore "vero" dell'azienda diviso per le azioni. E il punto in cui
 si incontrano chi vuole comprare e chi vuole vendere, in ogni istante. Riflette le *aspettative* del
 mercato sugli utili futuri. Tutto il mestiere della valutazione consiste nel chiedersi: questo prezzo
-è giustificato dai fondamentali, o no?
+e giustificato dai fondamentali, o no?
 """,
             "key": "Possedere un'azione = possedere una frazione dell'azienda e dei suoi utili futuri. Il prezzo riflette le aspettative, non un valore oggettivo.",
         },
@@ -479,79 +576,76 @@ mercato sugli utili futuri. Tutto il mestiere della valutazione consiste nel chi
 Per valutare un'azienda devi saper leggere il suo **bilancio**, composto da tre prospetti che
 rispondono a tre domande diverse.
 
-**1. Stato patrimoniale (balance sheet) — "Cosa possiede e cosa deve?"**
-È una fotografia in un istante. Si divide in:
-- **Attività**: tutto ciò che l'azienda possiede (cassa, magazzino, immobili, macchinari, crediti).
-- **Passività**: tutto ciò che deve (debiti verso banche, fornitori, dipendenti).
-- **Patrimonio netto**: la differenza. È ciò che resta agli azionisti se si vendesse tutto e si
-pagassero i debiti. Vale sempre: *Attività = Passività + Patrimonio netto*.
+**1. Stato patrimoniale (balance sheet) - "Cosa possiede e cosa deve?"**
+E una fotografia in un istante. Si divide in:
+- **Attivita**: tutto cio che l'azienda possiede (cassa, magazzino, immobili, macchinari, crediti).
+- **Passivita**: tutto cio che deve (debiti verso banche, fornitori, dipendenti).
+- **Patrimonio netto**: la differenza. E cio che resta agli azionisti se si vendesse tutto e si
+pagassero i debiti. Vale sempre: *Attivita = Passivita + Patrimonio netto*.
 
-**2. Conto economico (income statement) — "Quanto ha guadagnato in un periodo?"**
-È un film che copre un anno (o un trimestre). Parte dai **ricavi** e sottrae i costi a strati:
-- Ricavi − costi di produzione = **margine lordo**
-- − costi operativi = **EBIT** (utile operativo)
-- − interessi e tasse = **utile netto** (la "bottom line", ciò che resta agli azionisti).
+**2. Conto economico (income statement) - "Quanto ha guadagnato in un periodo?"**
+E un film che copre un anno (o un trimestre). Parte dai **ricavi** e sottrae i costi a strati:
+- Ricavi - costi di produzione = **margine lordo**
+- - costi operativi = **EBIT** (utile operativo)
+- - interessi e tasse = **utile netto** (la "bottom line", cio che resta agli azionisti).
 
-**3. Rendiconto finanziario (cash flow statement) — "Quanta cassa è entrata e uscita davvero?"**
-L'utile contabile non è cassa: si può avere utile e non avere liquidità (e viceversa). Questo prospetto
-segue i soldi veri, divisi in flussi da attività operativa, di investimento e di finanziamento.
+**3. Rendiconto finanziario (cash flow statement) - "Quanta cassa e entrata e uscita davvero?"**
+L'utile contabile non e cassa: si puo avere utile e non avere liquidita (e viceversa). Questo prospetto
+segue i soldi veri, divisi in flussi da attivita operativa, di investimento e di finanziamento.
 
-**Perché tre tabelle?** Perché un'azienda sana deve esserlo su tutti e tre i fronti: solida nel
-patrimonio, redditizia nel conto economico, capace di generare cassa nel rendiconto. Un'azienda può
-sembrare profittevole e fallire lo stesso, se non genera liquidità.
+**Perche tre tabelle?** Perche un'azienda sana deve esserlo su tutti e tre i fronti: solida nel
+patrimonio, redditizia nel conto economico, capace di generare cassa nel rendiconto. Un'azienda puo
+sembrare profittevole e fallire lo stesso, se non genera liquidita.
 """,
             "key": "Stato patrimoniale = cosa possiede/deve (foto). Conto economico = quanto guadagna (film). Rendiconto = la cassa reale. Servono tutti e tre.",
         },
         {
             "n": 3,
-            "title": "Utile vs cassa: perché EBITDA e Free Cash Flow",
+            "title": "Utile vs cassa: perche EBITDA e Free Cash Flow",
             "subtitle": "La differenza che manda in errore i principianti",
             "body": """
-Il concetto più importante e meno intuitivo: **l'utile contabile non è denaro in banca.**
+Il concetto piu importante e meno intuitivo: **l'utile contabile non e denaro in banca.**
 
-Esempio: vendi merce per 100 a un cliente che pagherà fra 6 mesi. In conto economico registri subito
-100 di ricavo e magari 30 di utile. Ma in cassa, oggi, non è entrato nulla. Sei "profittevole" e
-contemporaneamente a corto di liquidità.
+Esempio: vendi merce per 100 a un cliente che paghera fra 6 mesi. In conto economico registri subito
+100 di ricavo e magari 30 di utile. Ma in cassa, oggi, non e entrato nulla. Sei "profittevole" e
+contemporaneamente a corto di liquidita.
 
 Per questo gli analisti guardano misure diverse a seconda di cosa vogliono sapere:
 
 **EBITDA** = utile prima di interessi, tasse, svalutazioni e ammortamenti. Serve ad avvicinarsi alla
-redditività *operativa* pulita, togliendo voci non monetarie (ammortamenti) e scelte finanziarie/fiscali.
-Utile per confrontare aziende diverse, ma **non è cassa**: ignora gli investimenti necessari a far girare
+redditivita *operativa* pulita, togliendo voci non monetarie (ammortamenti) e scelte finanziarie/fiscali.
+Utile per confrontare aziende diverse, ma **non e cassa**: ignora gli investimenti necessari a far girare
 l'azienda.
 
 **Free Cash Flow (FCF)** = la cassa che l'azienda genera *dopo* aver pagato gli investimenti necessari
-(capex). È il numero più vicino a "quanti soldi liberi produce davvero". Formula base:
+(capex). E il numero piu vicino a "quanti soldi liberi produce davvero". Formula base:
 
-<span class="formula">FCF = Flusso di cassa operativo − Capex</span>
+<span class="formula">FCF = Flusso di cassa operativo - Capex</span>
 
-Il FCF è il cuore della valutazione DCF: il valore di un'azienda è la somma dei flussi di cassa liberi
-che genererà in futuro, scontati a oggi. Se capisci il FCF, capisci il 70% della valutazione.
+Il FCF e il cuore della valutazione DCF: il valore di un'azienda e la somma dei flussi di cassa liberi
+che generera in futuro, scontati a oggi. Se capisci il FCF, capisci il 70% della valutazione.
 
-**Attenzione**: un singolo anno di FCF può essere distorto (un grande investimento una-tantum, una
-vendita straordinaria). Per questo nella sezione Valutazione puoi usare il **FCF medio** su più anni:
+**Attenzione**: un singolo anno di FCF puo essere distorto (un grande investimento una-tantum, una
+vendita straordinaria). Per questo nella sezione Valutazione puoi usare il **FCF medio** su piu anni:
 riduce il rumore.
 """,
-            "key": "Utile ≠ cassa. EBITDA = redditività operativa (ma non è cassa). FCF = cassa libera dopo gli investimenti, ed è la base del DCF.",
+            "key": "Utile != cassa. EBITDA = redditivita operativa (ma non e cassa). FCF = cassa libera dopo gli investimenti, ed e la base del DCF.",
         },
     ]
     # ---- FINE ELENCO LEZIONI ----
 
-    titles = [f"Lezione {l['n']} — {l['title']}" for l in LESSONS]
+    titles = [f"Lezione {l['n']} - {l['title']}" for l in LESSONS]
     sel = st.selectbox("Scegli la lezione", titles, index=len(titles)-1)
     lesson = LESSONS[titles.index(sel)]
 
-    st.markdown(f"### Lezione {lesson['n']} · {lesson['title']}")
+    st.markdown(f"### Lezione {lesson['n']} - {lesson['title']}")
     st.markdown(f'<p class="muted">{lesson["subtitle"]}</p>', unsafe_allow_html=True)
     st.markdown(f'<div class="lesson">{lesson["body"]}</div>', unsafe_allow_html=True)
-    st.success(f"💡 **In una frase:** {lesson['key']}")
+    st.success(f":bulb: **In una frase:** {lesson['key']}")
 
-    # progress
     st.markdown("---")
-    st.markdown(f"**Lezioni pubblicate:** {len(LESSONS)} · "
+    st.markdown(f"**Lezioni pubblicate:** {len(LESSONS)} - "
                 f"Prossima in arrivo: Lezione {len(LESSONS)+1}")
-    st.caption("Il corso cresce una lezione alla volta. Le prossime tappe previste: i multipli (P/E, P/BV), "
+    st.caption("Il corso cresce una lezione alla volta. Prossime tappe: i multipli (P/E, P/BV), "
                "il valore temporale del denaro, il costo del capitale (WACC), il DCF passo passo, "
                "e infine la valutazione di banche e assicurazioni.")
-
-
